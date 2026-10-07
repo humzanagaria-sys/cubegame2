@@ -1,0 +1,434 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3D Multiplayer Cyber Arena</title>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #050505; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; user-select: none; }
+        
+        /* Menu System styling */
+        #menu-container { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: rgba(5, 5, 10, 0.95); z-index: 100; display: flex; flex-direction: column; justify-content: center; align-items: center; color: white; }
+        .menu-card { background: #0c0c1e; padding: 40px; border-radius: 10px; border: 2px solid #00ffcc; text-align: center; box-shadow: 0 0 20px rgba(0, 255, 204, 0.2); max-width: 400px; width: 100%; }
+        h1 { margin-top: 0; font-size: 28px; color: #00ffcc; letter-spacing: 2px; }
+        button { background: #00ffcc; border: none; color: #000; padding: 12px 24px; font-size: 16px; font-weight: bold; border-radius: 5px; cursor: pointer; margin: 10px 0; width: 100%; transition: 0.2s; }
+        button:hover { background: #fff; box-shadow: 0 0 15px #00ffcc; }
+        input { background: #1a1a3a; border: 1px solid #00ffcc; color: white; padding: 10px; border-radius: 5px; width: calc(100% - 22px); margin-bottom: 10px; text-align: center; font-size: 16px; }
+        .divider { margin: 15px 0; color: #555; }
+
+        /* HUD & Gameplay Overlays */
+        #game-ui { display: none; }
+        #ui-container { position: absolute; top: 10px; left: 10px; color: white; text-shadow: 2px 2px 4px #000; z-index: 10; pointer-events: none; }
+        .bar { width: 200px; height: 20px; background: #333; border: 2px solid #fff; border-radius: 5px; margin-bottom: 5px; overflow: hidden; }
+        .fill { height: 100%; transition: width 0.1s ease; }
+        #player-hp-fill { background: #00ffcc; width: 100%; }
+        #boss-hp-container { position: absolute; top: 20px; left: 50%; transform: translateX(-50%); text-align: center; color: #ff0055; font-weight: bold; font-size: 20px; z-index: 10; display: none; }
+        #boss-hp-bar { width: 400px; height: 25px; background: #222; border: 3px solid #ff0055; border-radius: 5px; }
+        #boss-hp-fill { background: linear-gradient(90deg, #ff0055, #ff5500); width: 100%; }
+        #crosshair { position: absolute; top: 50%; left: 50%; width: 10px; height: 10px; background: #00ffcc; border-radius: 50%; transform: translate(-50%, -50%); pointer-events: none; z-index: 10; box-shadow: 0 0 8px #00ffcc; display: none; }
+        #lobby-status { margin-top: 5px; font-size: 14px; color: #aaa; background: rgba(0,0,0,0.5); padding: 5px; border-radius: 3px; }
+        #instructions { position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%); color: rgba(255,255,255,0.6); text-align: center; font-size: 14px; z-index: 10; pointer-events: none; display: none; }
+    </style>
+    <!-- Core dependencies: Three.js and PeerJS Framework -->
+    <script src="https://cloudflare.com"></script>
+    <script src="https://unpkg.com"></script>
+</head>
+<body>
+
+    <!-- Main Entry Screen -->
+    <div id="menu-container">
+        <div class="menu-card">
+            <h1>CYBER ARENA 3D</h1>
+            <p style="color: #888; font-size: 14px; margin-bottom: 25px;">Defeat the Omega Core alone or with a friend.</p>
+            
+            <!-- Mode Option 1: Solo -->
+            <button id="btn-solo">PLAY SINGLEPLAYER</button>
+            
+            <div class="divider">─ OR ─</div>
+            
+            <!-- Mode Option 2: Multiplayer -->
+            <div id="mp-setup-box">
+                <button id="btn-host">HOST MULTIPLAYER MATCH</button>
+                <div id="host-id-display" style="margin: 5px 0; font-size: 13px; color: #00ffcc; word-break: break-all;"></div>
+                
+                <div style="margin: 10px 0; height: 1px; background: #222;"></div>
+                
+                <input type="text" id="join-id-input" placeholder="Paste Friend's Room ID Here">
+                <button id="btn-join" style="background: #ff0055; color: white;">JOIN MATCH</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Active Gameplay HUD elements -->
+    <div id="game-ui">
+        <div id="crosshair"></div>
+        <div id="ui-container">
+            <div>PLAYER HEALTH</div>
+            <div class="bar"><div id="player-hp-fill" class="fill"></div></div>
+            <div id="score-board">Boss Stage: <span id="stage-val">1</span></div>
+            <div id="lobby-status">Network Mode: Singleplayer</div>
+        </div>
+
+        <div id="boss-hp-container">
+            <div id="boss-name">OMEGA NEXUS CORE</div>
+            <div id="boss-hp-bar"><div id="boss-hp-fill" class="fill"></div></div>
+        </div>
+
+        <div id="instructions">WASD to Move | Mouse to Aim | Click to Shoot / Lock Pointer</div>
+    </div>
+
+    <script>
+        // --- GAME CONFIGURATION & GLOBALS ---
+        const CONFIG = {
+            playerSpeed: 0.15,
+            projectileSpeed: 0.8,
+            bossMaxHp: 1000,
+            playerMaxHp: 100
+        };
+
+        let scene, camera, renderer;
+        let player = { hp: CONFIG.playerMaxHp, x: 0, z: 20, targetX: 0, targetZ: 20, lastNetworkUpdate: 0 };
+        let boss = { mesh: null, hp: CONFIG.bossMaxHp, state: 'idle', timer: 0, stage: 1 };
+        let keys = { w: false, a: false, s: false, d: false };
+        let mouse = { x: 0, y: 0 };
+        
+        let projectiles = [];
+        let bossProjectiles = [];
+        let particles = [];
+        
+        // --- MULTIPLAYER P2P VARIABLES ---
+        let isMultiplayer = false;
+        let isHost = false;
+        let peer = null;
+        let connection = null; 
+        let remotePlayers = {}; 
+
+        // --- INTERFACE INTERACTION HANDLERS ---
+        document.getElementById('btn-solo').addEventListener('click', () => {
+            startTheGame(false);
+        });
+
+        document.getElementById('btn-host').addEventListener('click', () => {
+            document.getElementById('btn-host').innerText = "Generating Room ID...";
+            // Spin up public connection room broker
+            peer = new Peer();
+            
+            peer.on('open', (id) => {
+                isHost = true;
+                document.getElementById('host-id-display').innerHTML = `Give this Room ID to your friend:<br><b style="color:white; font-size:15px;">${id}</b>`;
+                document.getElementById('btn-host').style.display = "none";
+            });
+
+            peer.on('connection', (conn) => {
+                connection = conn;
+                setupNetworkDataChannels();
+                startTheGame(true);
+            });
+        });
+
+        document.getElementById('btn-join').addEventListener('click', () => {
+            const targetId = document.getElementById('join-id-input').value.trim();
+            if(!targetId) return alert("Please enter a valid Room ID first!");
+
+            document.getElementById('btn-join').innerText = "Connecting...";
+            peer = new Peer();
+
+            peer.on('open', () => {
+                connection = peer.connect(targetId);
+                connection.on('open', () => {
+                    isHost = false;
+                    startTheGame(true);
+                });
+            });
+        });
+
+        function startTheGame(multiplayerFlag) {
+            isMultiplayer = multiplayerFlag;
+            // Hide menu layout, reveal interface viewport layer
+            document.getElementById('menu-container').style.display = 'none';
+            document.getElementById('game-ui').style.display = 'block';
+            document.getElementById('crosshair').style.display = 'block';
+            document.getElementById('instructions').style.display = 'block';
+            
+            if(isMultiplayer) {
+                document.getElementById('lobby-status').innerText = isHost ? "Mode: P2P Host (Connected)" : "Mode: P2P Guest (Connected)";
+            }
+
+            initGameEngine();
+        }
+
+        // --- WEBGL GAME ENGINE SETUP ---
+        function initGameEngine() {
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x020208);
+            scene.fog = new THREE.FogExp2(0x020208, 0.015);
+
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+            
+            renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.shadowMap.enabled = true;
+            renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+            renderer.toneMapping = THREE.ACESFilmicToneMapping;
+            document.body.appendChild(renderer.domElement);
+
+            buildEnvironment();
+            setupLighting();
+            spawnBoss();
+
+            // Setup local environment hooks
+            window.addEventListener('resize', onWindowResize, false);
+            document.addEventListener('keydown', (e) => handleKeyboard(e, true));
+            document.addEventListener('keyup', (e) => handleKeyboard(e, false));
+            document.addEventListener('click', () => {
+                if(document.pointerLockElement !== document.body) {
+                    document.body.requestPointerLock();
+                } else {
+                    firePlayerProjectile();
+                }
+            });
+            document.addEventListener('mousemove', handleMouseMove);
+
+            animate();
+        }
+
+        // --- P2P PAYLOAD HANDLERS ---
+        function setupNetworkDataChannels() {
+            connection.on('data', (data) => {
+                if (data.type === 'move') {
+                    // Update external mesh telemetry
+                    if (!remotePlayers[connection.peer]) {
+                        spawnRemotePeer(connection.peer);
+}
+remotePlayers[connection.peer].position.set(data.x, 1.5, data.z);
+}
+if (data.type === 'shoot') {
+createRemoteLaser(data.origin, data.dir);
+}
+if (data.type === 'bossSync' && !isHost) {
+// Synchronize dynamic AI ticks if client is guest
+boss.hp = data.hp;
+boss.stage = data.stage;
+document.getElementById('boss-hp-fill').style.width = ${(boss.hp / (CONFIG.bossMaxHp + (boss.stage*200 - 200))) * 100}%;
+document.getElementById('stage-val').innerText = boss.stage;
+if(boss.mesh) {
+boss.mesh.position.set(data.bx, data.by, data.bz);
+}
+}
+});
+}
+function broadcastPlayerPacket() {
+if(!isMultiplayer || !connection || !connection.open) return;
+let now = performance.now();
+if(now - player.lastNetworkUpdate > 30) { // Limit outgoing packets to 33 Hz to optimize pipeline performance
+connection.send({
+type: 'move',
+x: player.x,
+z: player.z
+});
+player.lastNetworkUpdate = now;
+}
+}
+// --- ENVIRONMENT & STATIC GEOMETRY ---
+function buildEnvironment() {
+const floorGeo = new THREE.PlaneGeometry(200, 200, 50, 50);
+const floorMat = new THREE.MeshStandardMaterial({ color: 0x111122, roughness: 0.2, metalness: 0.8 });
+const floor = new THREE.Mesh(floorGeo, floorMat);
+floor.rotation.x = -Math.PI / 2;
+floor.receiveShadow = true;
+scene.add(floor);
+const gridHelper = new THREE.GridHelper(200, 50, 0x00ffcc, 0x223344);
+gridHelper.position.y = 0.01;
+scene.add(gridHelper);
+const pillarGeo = new THREE.BoxGeometry(4, 30, 4);
+const pillarMat = new THREE.MeshStandardMaterial({ color: 0x0a0a15, roughness: 0.5 });
+for(let i = 0; i < 12; i++) {
+const pillar = new THREE.Mesh(pillarGeo, pillarMat);
+let angle = (i / 12) * Math.PI * 2;
+pillar.position.set(Math.cos(angle) * 60, 15, Math.sin(angle) * 60);
+pillar.castShadow = true;
+scene.add(pillar);
+}
+}
+function setupLighting() {
+scene.add(new THREE.AmbientLight(0xffffff, 0.15));
+const dirLight = new THREE.DirectionalLight(0xffffff, 1.5);
+dirLight.position.set(40, 100, 40);
+dirLight.castShadow = true;
+scene.add(dirLight);
+const neonBlue = new THREE.PointLight(0x00ffcc, 2, 50);
+neonBlue.position.set(-20, 5, -20);
+scene.add(neonBlue);
+}
+function spawnBoss() {
+const group = new THREE.Group();
+const coreMesh = new THREE.Mesh(new THREE.OctahedronGeometry(6, 0), new THREE.MeshStandardMaterial({ color: 0xff0055, emissive: 0x550011, metalness: 0.9 }));
+coreMesh.castShadow = true;
+group.add(coreMesh);
+const ring = new THREE.Mesh(new THREE.TorusGeometry(9, 0.6, 16, 100), new THREE.MeshStandardMaterial({ color: 0x00ffcc, metalness: 0.8 }));
+group.add(ring);
+group.position.set(0, 10, -30);
+scene.add(group);
+boss.mesh = group;
+document.getElementById('boss-hp-container').style.display = 'block';
+}
+function spawnRemotePeer(id) {
+const geo = new THREE.ConeGeometry(1.2, 3.5, 4);
+const mat = new THREE.MeshStandardMaterial({ color: 0xffaa00, emissive: 0x331100 });
+const mesh = new THREE.Mesh(geo, mat);
+mesh.position.set(0, 1.5, 0);
+scene.add(mesh);
+remotePlayers[id] = mesh;
+}
+// --- GAME LOOPS & RENDERING ---
+function runBossAI(time) {
+if (!boss.mesh || boss.hp <= 0) return;
+boss.mesh.children[0].rotation.y += 0.02;
+boss.mesh.position.y = 10 + Math.sin(time * 0.002) * 2;
+if (isMultiplayer && !isHost) return; // Only the host computes AI logic to avoid desync
+boss.timer++;
+if (boss.timer % 60 === 0) {
+// Radial Blast Pattern
+const count = 10 + boss.stage * 2;
+for (let i = 0; i < count; i++) {
+const angle = (i / count) * Math.PI * 2;
+let dir = new THREE.Vector3(Math.cos(angle), 0, Math.sin(angle));
+createBossProjectile(boss.mesh.position, dir);
+}
+}
+// Host sync stream
+if (isMultiplayer && isHost && connection && connection.open) {
+connection.send({
+type: 'bossSync',
+hp: boss.hp,
+stage: boss.stage,
+bx: boss.mesh.position.x,
+by: boss.mesh.position.y,
+bz: boss.mesh.position.z
+});
+}
+}
+function handleKeyboard(event, isDown) {
+switch (event.key.toLowerCase()) {
+case 'w': keys.w = isDown; break;
+case 'a': keys.a = isDown; break;
+case 's': keys.s = isDown; break;
+case 'd': keys.d = isDown; break;
+}
+}
+function handleMouseMove(e) {
+if (document.pointerLockElement === document.body) {
+mouse.x += e.movementX * 0.002;
+mouse.y -= e.movementY * 0.002;
+mouse.y = Math.max(-Math.PI/3, Math.min(Math.PI/3, mouse.y));
+}
+}
+function updatePlayerPhysics() {
+let forward = new THREE.Vector3(0, 0, -1).applyAxisAngle(new THREE.Vector3(0, 1, 0), mouse.x);
+let right = new THREE.Vector3(1, 0, 0).applyAxisAngle(new THREE.Vector3(0, 1, 0), mouse.x);
+let moveDir = new THREE.Vector3();
+if (keys.w) moveDir.add(forward);
+if (keys.s) moveDir.add(forward.clone().negate());
+if (keys.d) moveDir.add(right);
+if (keys.a) moveDir.add(right.clone().negate());
+moveDir.normalize().multiplyScalar(CONFIG.playerSpeed);
+player.x += moveDir.x;
+player.z += moveDir.z;
+player.x = Math.max(-95, Math.min(95, player.x));
+player.z = Math.max(-95, Math.min(95, player.z));
+camera.position.set(player.x, 3, player.z);
+const lookTarget = new THREE.Vector3(
+player.x + Math.sin(mouse.x) * Math.cos(mouse.y),
+3 + Math.sin(mouse.y),
+player.z - Math.cos(mouse.x) * Math.cos(mouse.y)
+);
+camera.lookAt(lookTarget);
+broadcastPlayerPacket();
+}
+function firePlayerProjectile() {
+const dir = new THREE.Vector3();
+camera.getWorldDirection(dir);
+const origin = new THREE.Vector3(player.x, 2.5, player.z);
+createLaserMesh(origin, dir, 0x00ffcc, projectiles);
+if (isMultiplayer && connection && connection.open) {
+connection.send({ type: 'shoot', origin: origin, dir: dir });
+}
+}
+function createRemoteLaser(origin, dir) {
+createLaserMesh(new THREE.Vector3(origin.x, origin.y, origin.z), new THREE.Vector3(dir.x, dir.y, dir.z), 0xffaa00, projectiles);
+}
+function createLaserMesh(origin, dir, color, array) {
+const mesh = new THREE.Mesh(new THREE.SphereGeometry(0.2, 8, 8), new THREE.MeshBasicMaterial({ color: color }));
+mesh.position.copy(origin);
+scene.add(mesh);
+array.push({ mesh, dir });
+}
+function createBossProjectile(pos, dir) {
+const mesh = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.5, 2), new THREE.MeshBasicMaterial({ color: 0xff0055 }));
+mesh.position.copy(pos);
+mesh.lookAt(pos.clone().add(dir));
+scene.add(mesh);
+bossProjectiles.push({ mesh, dir });
+}
+function updateProjectiles() {
+// Processing player beams
+for (let i = projectiles.length - 1; i >= 0; i--) {
+let p = projectiles[i];
+p.mesh.position.addScaledVector(p.dir, CONFIG.projectileSpeed);
+if (p.mesh.position.distanceTo(camera.position) > 150) {
+scene.remove(p.mesh);
+projectiles.splice(i, 1);
+continue;
+}
+if (boss.mesh && boss.hp > 0) {
+if (p.mesh.position.distanceTo(boss.mesh.position) < 7) {
+if (!isMultiplayer || isHost) {
+boss.hp -= 15;
+if(boss.hp <= 0) triggerBossDefeat();
+}
+scene.remove(p.mesh);
+projectiles.splice(i, 1);
+continue;
+}
+}
+}
+// Processing hostile boss projectiles
+for (let i = bossProjectiles.length - 1; i >= 0; i--) {
+let bp = bossProjectiles[i];
+bp.mesh.position.addScaledVector(bp.dir, 0.4 + (boss.stage * 0.05));
+let pPos = new THREE.Vector3(player.x, 2, player.z);
+if (bp.mesh.position.distanceTo(pPos) < 2.0) {
+player.hp -= 5;
+document.getElementById('player-hp-fill').style.width = ${Math.max(0, player.hp)}%;
+scene.remove(bp.mesh);
+bossProjectiles.splice(i, 1);
+if (player.hp <= 0) {
+alert("DEFEAT. Resetting simulation matrix...");
+window.location.reload();
+}
+continue;
+}
+if(bp.mesh.position.length() > 150) {
+scene.remove(bp.mesh);
+bossProjectiles.splice(i, 1);
+}
+}
+}
+function triggerBossDefeat() {
+boss.stage++;
+document.getElementById('stage-val').innerText = boss.stage;
+boss.hp = CONFIG.bossMaxHp + (boss.stage * 200);
+}
+function onWindowResize() {
+if(!camera) return;
+camera.aspect = window.innerWidth / window.innerHeight;
+camera.updateProjectionMatrix();
+renderer.setSize(window.innerWidth, window.innerHeight);
+}
+function animate(timestamp) {
+requestAnimationFrame(animate);
+updatePlayerPhysics();
+runBossAI(timestamp);
+updateProjectiles();
+renderer.render(scene, camera);
+}
