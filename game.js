@@ -43,6 +43,9 @@ class GameEngine {
         this.initEngine();
     }
     initEngine() {
+        // Explicitly map THREE framework scope across module boundaries
+        window.THREE = window.THREE || THREE;
+
         this.scene = new THREE.Scene();
         this.scene.background = new THREE.Color(0x020208);
         this.scene.fog = new THREE.FogExp2(0x020208, 0.015);
@@ -51,9 +54,11 @@ class GameEngine {
         this.renderer.setSize(window.innerWidth, window.innerHeight);
         this.renderer.shadowMap.enabled = true;
         document.body.appendChild(this.renderer.domElement);
+        
         buildEnvironment(this.scene);
         setupLighting(this.scene);
         this.boss = new Boss(this.scene);
+        
         document.getElementById('boss-hp-container').style.display = 'block';
         window.addEventListener('resize', () => this.onWindowResize());
         document.addEventListener('keydown', (e) => this.handleKeys(e, true));
@@ -206,4 +211,3 @@ class GameEngine {
         this.renderer.render(this.scene, this.camera);
     }
 }
-new GameEngine();
